@@ -19,7 +19,7 @@
 #define MAX_PATH_LENGTH 1024
 #define MAX_RECOMMENDATIONS 100
 #define HISTORY_FILE ".dwimsh_history"
-#define LEVENSHTEIN_THRESHOLD 0.4  // Levenshtein threshold for recommendations
+#define LEVENSHTEIN_THRESHOLD 0.4
 
 // ANSI color codes
 #define COLOR_RED     "\x1b[31m"
@@ -66,6 +66,8 @@ void PrintHelpMessage();
 void Cleanup();
 char *GetPrompt();
 void PrintColoredText(const char *text, const char *color);
+char *CommandGenerator(const char *text, int state);
+void InitializeCompletion();
 
 // Signal handler for clean exit
 void HandleSignal(int sig) {
@@ -110,7 +112,7 @@ void PrintWelcomeMessage() {
                 printf("██████╔╝╚███╔███╔╝██║██║ ╚═╝ ██║███████║██║  ██║\n");
                 printf("╚═════╝  ╚══╝╚══╝ ╚═╝╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝\n" COLOR_RESET);
     printf(COLOR_GREEN "Do What I Mean Shell - Linux Edition v1.0\n" COLOR_RESET);
-    printf(COLOR_GREEN "WRITTEN BY VÍCTOR ROMERO - 12211079\n\n" COLOR_RESET);
+    printf(COLOR_GREEN "WRITTEN BY VICTOR ROMERO - 12211079\n\n" COLOR_RESET);
     printf(COLOR_YELLOW "Type 'help' for available commands or 'exit' to quit\n" COLOR_RESET);
     printf("\n");
 }
@@ -134,7 +136,7 @@ void PrintHelpMessage() {
     printf("\n");
 }
 
-// Clean up resources
+// Cleanup resources and memory
 void Cleanup() {
     SaveHistory();
     FreeCommandsMemory();
@@ -150,7 +152,7 @@ char *GetPrompt() {
         strcpy(cwd, "unknown");
     }
     
-    // If we're in home directory, use ~ instead
+    // If in home directory, use '~'
     if (strncmp(cwd, homeDir, strlen(homeDir)) == 0) {
         char *home_relative = cwd + strlen(homeDir);
         if (*home_relative == '\0') {
@@ -165,12 +167,12 @@ char *GetPrompt() {
     return prompt;
 }
 
-// Print colored text
+// Print text with a specific color
 void PrintColoredText(const char *text, const char *color) {
     printf("%s%s%s", color, text, COLOR_RESET);
 }
 
-// Load commands from directories in PATH
+// Load commands from PATH directories
 void LoadCommands() {
     char *path = getenv("PATH");
     char *pathCopy = strdup(path);
@@ -185,7 +187,7 @@ void LoadCommands() {
         if (dirp != NULL) {
             while ((entry = readdir(dirp)) != NULL && cmdTable.count < MAX_CMDS) {
                 if (entry->d_type == DT_REG || entry->d_type == DT_LNK) {
-                    // Check if file is executable
+                    // Check if the file is executable
                     char fullPath[MAX_PATH_LENGTH];
                     snprintf(fullPath, MAX_PATH_LENGTH, "%s/%s", dir, entry->d_name);
                     if (access(fullPath, X_OK) == 0) {
@@ -230,20 +232,26 @@ void LoadCommands() {
     }
 }
 
-// Check if command exists in the command table
+// Check if a command exists in the table using binary search
 int IsCommandInTable(const char *cmd) {
     if (cmd == NULL || *cmd == '\0')
         return 0;
-        
-    for (int i = 0; i < cmdTable.count; i++) {
-        if (strcmp(cmdTable.commands[i], cmd) == 0) {
+    
+    int low = 0, high = cmdTable.count - 1;
+    while (low <= high) {
+        int mid = (low + high) / 2;
+        int cmp = strcmp(cmd, cmdTable.commands[mid]);
+        if (cmp == 0)
             return 1;
-        }
+        else if (cmp < 0)
+            high = mid - 1;
+        else
+            low = mid + 1;
     }
     return 0;
 }
 
-// Check if command is a built-in command
+// Check if a command is a built-in command
 int IsBuiltInCommand(const char *cmd) {
     if (cmd == NULL || *cmd == '\0')
         return 0;
@@ -255,14 +263,14 @@ int IsBuiltInCommand(const char *cmd) {
             strcmp(cmd, "history") == 0);
 }
 
-// Free memory from command table
+// Free the memory used in the command table
 void FreeCommandsMemory() {
     for (int i = 0; i < cmdTable.count; i++) {
         free(cmdTable.commands[i]);
     }
 }
 
-// Split command into tokens
+// Split user input into tokens
 void TokenizeUserInput(char *command, char **tokens, int *tokenCount) {
     *tokenCount = 0;
     char *token = strtok(command, " \t");
@@ -276,14 +284,14 @@ void TokenizeUserInput(char *command, char **tokens, int *tokenCount) {
     tokens[*tokenCount] = NULL;
 }
 
-// Print command tokens
+// Print command tokens (useful for debugging)
 void PrintTokens(char **tokens, int tokenCount) {
     for (int i = 0; i < tokenCount; i++) {
         printf("Token %d: %s\n", i, tokens[i]);
     }
 }
 
-// Calculate Hamming Distance between two strings
+// Calculate the Hamming distance between two strings
 int HammingDistance(const char *str1, const char *str2) {
     if (strlen(str1) != strlen(str2))
         return -1;
@@ -297,7 +305,7 @@ int HammingDistance(const char *str1, const char *str2) {
     return distance;
 }
 
-// Calculate Levenshtein Distance between two strings
+// Calculate the Levenshtein distance between two strings
 int LevenshteinDistance(const char *s1, const char *s2) {
     int len1 = strlen(s1);
     int len2 = strlen(s2);
@@ -351,44 +359,50 @@ int AreAnagrams(const char *str1, const char *str2) {
 // Find similar commands using multiple algorithms
 void FindSimilarCommands(const char *cmd, char **recommendations, int *recommendationCount) {
     *recommendationCount = 0;
+    int len_cmd = strlen(cmd);
     
-    // Skip empty commands
-    if (cmd == NULL || *cmd == '\0')
+    if (len_cmd == 0)
         return;
     
     for (int i = 0; i < cmdTable.count && *recommendationCount < MAX_RECOMMENDATIONS; i++) {
-        // Skip very short commands (less than 2 chars)
-        if (strlen(cmdTable.commands[i]) < 2)
+        int len_table = strlen(cmdTable.commands[i]);
+        
+        // Skip very short commands
+        if (len_table < 2)
             continue;
-            
-        // Check Hamming distance for same-length strings
-        if (strlen(cmd) == strlen(cmdTable.commands[i])) {
+        
+        // Filter: skip if the difference in length is too large
+        if (fabs(len_cmd - len_table) > fmax(len_cmd, len_table) * LEVENSHTEIN_THRESHOLD)
+            continue;
+        
+        // 1. Substring check (fast method)
+        if (strstr(cmdTable.commands[i], cmd) != NULL) {
+            recommendations[*recommendationCount] = strdup(cmdTable.commands[i]);
+            (*recommendationCount)++;
+            continue;
+        }
+        
+        // 2. Hamming distance (if lengths are equal)
+        if (len_cmd == len_table) {
             int distance = HammingDistance(cmd, cmdTable.commands[i]);
-            if (distance >= 0 && distance <= strlen(cmd) * 0.5) {
+            if (distance >= 0 && distance <= len_cmd * 0.5) {
                 recommendations[*recommendationCount] = strdup(cmdTable.commands[i]);
                 (*recommendationCount)++;
                 continue;
             }
         }
         
-        // Check Levenshtein distance for strings of different lengths
+        // 3. Levenshtein distance (for different lengths)
         int distance = LevenshteinDistance(cmd, cmdTable.commands[i]);
-        float normalized_distance = (float)distance / (float)fmax(strlen(cmd), strlen(cmdTable.commands[i]));
+        float normalized_distance = (float)distance / (float)fmax(len_cmd, len_table);
         if (normalized_distance <= LEVENSHTEIN_THRESHOLD) {
             recommendations[*recommendationCount] = strdup(cmdTable.commands[i]);
             (*recommendationCount)++;
             continue;
         }
         
-        // Check for anagrams
+        // 4. Check if they are anagrams
         if (AreAnagrams(cmd, cmdTable.commands[i])) {
-            recommendations[*recommendationCount] = strdup(cmdTable.commands[i]);
-            (*recommendationCount)++;
-            continue;
-        }
-        
-        // Check for substring match (cmd is contained in command)
-        if (strstr(cmdTable.commands[i], cmd) != NULL) {
             recommendations[*recommendationCount] = strdup(cmdTable.commands[i]);
             (*recommendationCount)++;
             continue;
@@ -396,7 +410,7 @@ void FindSimilarCommands(const char *cmd, char **recommendations, int *recommend
     }
 }
 
-// Join recommendation tokens into a string
+// Join the recommendation with the additional arguments from the original command
 void JoinUserRecommendation(char *recommendation, char **tokens, int tokenCount, char *newCommand) {
     strcpy(newCommand, recommendation);
     
@@ -406,7 +420,7 @@ void JoinUserRecommendation(char *recommendation, char **tokens, int tokenCount,
     }
 }
 
-// Print the command table
+// Print the table of available commands
 void ListCommandsTable() {
     printf("Available commands (%d total):\n", cmdTable.count);
     
@@ -414,7 +428,7 @@ void ListCommandsTable() {
     int rows = (cmdTable.count + columns - 1) / columns;
     int maxWidth = 0;
     
-    // Find max command length for formatting
+    // Calculate maximum width for formatting
     for (int i = 0; i < cmdTable.count; i++) {
         int len = strlen(cmdTable.commands[i]);
         if (len > maxWidth) {
@@ -442,11 +456,9 @@ void DeleteDuplicatedRecommendations(char **recommendations, int *recommendation
         for (int j = i + 1; j < *recommendationCount; j++) {
             if (strcmp(recommendations[i], recommendations[j]) == 0) {
                 free(recommendations[j]);
-                
                 for (int k = j; k < *recommendationCount - 1; k++) {
                     recommendations[k] = recommendations[k + 1];
                 }
-                
                 (*recommendationCount)--;
                 j--;
             }
@@ -454,7 +466,7 @@ void DeleteDuplicatedRecommendations(char **recommendations, int *recommendation
     }
 }
 
-// Check if response is some form of "yes"
+// Check if the user's response is a form of "yes"
 int IsYesResponse(const char *response) {
     if (response == NULL)
         return 0;
@@ -467,7 +479,6 @@ int IsYesResponse(const char *response) {
         lowerResponse[i] = tolower(lowerResponse[i]);
     }
     
-    // Check for various forms of "yes"
     return (strcmp(lowerResponse, "y") == 0 ||
             strcmp(lowerResponse, "yes") == 0 ||
             strcmp(lowerResponse, "yeah") == 0 ||
@@ -477,7 +488,7 @@ int IsYesResponse(const char *response) {
             strcmp(lowerResponse, "okay") == 0);
 }
 
-// Check if response is some form of "no"
+// Check if the user's response is a form of "no"
 int IsNoResponse(const char *response) {
     if (response == NULL)
         return 0;
@@ -490,14 +501,13 @@ int IsNoResponse(const char *response) {
         lowerResponse[i] = tolower(lowerResponse[i]);
     }
     
-    // Check for various forms of "no"
     return (strcmp(lowerResponse, "n") == 0 ||
             strcmp(lowerResponse, "no") == 0 ||
             strcmp(lowerResponse, "nope") == 0 ||
             strcmp(lowerResponse, "nah") == 0);
 }
 
-// Tab completion function for readline
+// Readline command generator for tab completion
 char *CommandGenerator(const char *text, int state) {
     static int list_index, len;
     
@@ -506,7 +516,6 @@ char *CommandGenerator(const char *text, int state) {
         len = strlen(text);
     }
     
-    // Return the next name which partially matches
     while (list_index < cmdTable.count) {
         char *name = cmdTable.commands[list_index];
         list_index++;
@@ -519,18 +528,18 @@ char *CommandGenerator(const char *text, int state) {
     return NULL;
 }
 
-// Initialize readline completion
+// Initialize readline tab completion
 void InitializeCompletion() {
     rl_attempted_completion_function = NULL;
     rl_completion_entry_function = CommandGenerator;
 }
 
-// Execute command with fork/exec
+// Execute command using fork/exec
 int ExecuteCommand(char **tokens, int tokenCount) {
     if (tokenCount == 0)
         return 0;
     
-    // Handle built-in commands first, regardless of table
+    // Handle built-in commands first
     if (strcmp(tokens[0], "exit") == 0) {
         return 1;  // Exit code
     } else if (strcmp(tokens[0], "help") == 0) {
@@ -552,7 +561,7 @@ int ExecuteCommand(char **tokens, int tokenCount) {
         return 0;
     }
     
-    // Only proceed if the command is in the table
+    // Only proceed if the command exists in the table
     if (!IsCommandInTable(tokens[0])) {
         return -1;  // Command not found
     }
@@ -564,12 +573,10 @@ int ExecuteCommand(char **tokens, int tokenCount) {
         perror("Fork error");
         return 0;
     } else if (pid == 0) {
-        // Child process
         execvp(tokens[0], tokens);
         perror("Command execution error");
         exit(EXIT_FAILURE);
     } else {
-        // Parent process
         int status;
         waitpid(pid, &status, 0);
         return 0;
@@ -587,7 +594,7 @@ int main(int argc, char *argv[]) {
     // Load commands
     LoadCommands();
     
-    // Set up tab completion
+    // Set up readline tab completion
     InitializeCompletion();
     
     // Print welcome message
@@ -602,7 +609,7 @@ int main(int argc, char *argv[]) {
         input = readline(prompt);
         free(prompt);
         
-        // Check for EOF (Ctrl+D)
+        // Handle EOF (Ctrl+D)
         if (input == NULL) {
             printf("\n");
             break;
@@ -621,7 +628,6 @@ int main(int argc, char *argv[]) {
         char *tokens[MAX_CMD_LENGTH];
         int tokenCount = 0;
         
-        // Create a copy since strtok modifies the string
         char *inputCopy = strdup(input);
         TokenizeUserInput(inputCopy, tokens, &tokenCount);
         
@@ -632,19 +638,17 @@ int main(int argc, char *argv[]) {
                 // Exit command
                 should_exit = 1;
             } else if (result == -1) {
-                // Command not found, look for recommendations
+                // Command not found, search for recommendations
                 printf(COLOR_RED "Command not found: %s\n" COLOR_RESET, tokens[0]);
                 
                 char *recommendations[MAX_RECOMMENDATIONS];
                 int recommendationCount = 0;
                 
-                // Find similar commands
                 FindSimilarCommands(tokens[0], recommendations, &recommendationCount);
                 
                 if (recommendationCount == 0) {
                     printf("No similar commands found. Please try again.\n");
                 } else {
-                    // Remove duplicates
                     DeleteDuplicatedRecommendations(recommendations, &recommendationCount);
                     
                     printf(COLOR_YELLOW "Found %d possible command%s:\n" COLOR_RESET, 
@@ -654,16 +658,12 @@ int main(int argc, char *argv[]) {
                     char userInput[MAX_CMD_LENGTH];
                     for (int i = 0; i < recommendationCount; i++) {
                         printf(COLOR_CYAN "Did you mean: \"" COLOR_BOLD "%s", recommendations[i]);
-                        
                         for (int j = 1; j < tokenCount; j++) {
                             printf(" %s", tokens[j]);
                         }
-                        
                         printf(COLOR_RESET COLOR_CYAN "\"? [y/n] " COLOR_RESET);
                         
-                        // Get user input
                         if (fgets(userInput, sizeof(userInput), stdin) == NULL) {
-                            // Handle EOF
                             printf("\n");
                             for (int k = 0; k < recommendationCount; k++) {
                                 free(recommendations[k]);
@@ -674,25 +674,19 @@ int main(int argc, char *argv[]) {
                             return 0;
                         }
                         
-                        // Remove newline
                         userInput[strcspn(userInput, "\n")] = 0;
                         
                         if (IsYesResponse(userInput)) {
-                            // User accepted recommendation
                             char newCommand[MAX_CMD_LENGTH];
                             char *newTokens[MAX_CMD_LENGTH];
                             int newTokenCount = 0;
                             
-                            // Create the command string
                             JoinUserRecommendation(recommendations[i], tokens, tokenCount, newCommand);
-                            
                             printf(COLOR_GREEN "Executing: %s\n" COLOR_RESET, newCommand);
                             
-                            // Parse the new command
                             char *newCommandCopy = strdup(newCommand);
                             TokenizeUserInput(newCommandCopy, newTokens, &newTokenCount);
                             
-                            // Execute the command
                             int exec_result = ExecuteCommand(newTokens, newTokenCount);
                             if (exec_result == 1) {
                                 should_exit = 1;
@@ -701,7 +695,6 @@ int main(int argc, char *argv[]) {
                             free(newCommandCopy);
                             break;
                         } else if (IsNoResponse(userInput)) {
-                            // Try next recommendation
                             continue;
                         } else {
                             printf(COLOR_RED "Please enter 'y' or 'n'.\n" COLOR_RESET);
@@ -709,7 +702,6 @@ int main(int argc, char *argv[]) {
                         }
                     }
                     
-                    // Free recommendations
                     for (int i = 0; i < recommendationCount; i++) {
                         free(recommendations[i]);
                     }
@@ -721,7 +713,6 @@ int main(int argc, char *argv[]) {
         free(input);
     }
     
-    // Cleanup before exit
     Cleanup();
     
     return 0;
